@@ -90,6 +90,11 @@ export class TitleScene extends Phaser.Scene {
     this.input.keyboard.on('keydown', () => {
       this.scene.start('CharacterSelectScene');
     });
+
+    // Gamepad: any button press advances
+    this.input.gamepad.on('down', () => {
+      this.scene.start('CharacterSelectScene');
+    });
   }
 
   drawCloud(x, y) {

@@ -129,21 +129,26 @@ export class GameScene extends Phaser.Scene {
   update() {
     const speed = 200;
     const jumpSpeed = -350;
+    const pad = this.input.gamepad.pad1;
 
-    // Horizontal movement
-    if (this.cursors.left.isDown) {
+    // Horizontal movement (keyboard + gamepad)
+    const goLeft = this.cursors.left.isDown || (pad && (pad.left || pad.leftStick.x < -0.3));
+    const goRight = this.cursors.right.isDown || (pad && (pad.right || pad.leftStick.x > 0.3));
+
+    if (goLeft) {
       this.player.setVelocityX(-speed);
       this.player.setFlipX(true);
-    } else if (this.cursors.right.isDown) {
+    } else if (goRight) {
       this.player.setVelocityX(speed);
       this.player.setFlipX(false);
     } else {
       this.player.setVelocityX(0);
     }
 
-    // Jump - only when touching ground
+    // Jump (keyboard + gamepad A/B button or d-pad up)
     const onGround = this.player.body.touching.down || this.player.body.blocked.down;
-    if ((this.cursors.up.isDown || this.spaceBar.isDown) && onGround) {
+    const padJump = pad && (pad.A || pad.up || pad.leftStick.y < -0.5);
+    if ((this.cursors.up.isDown || this.spaceBar.isDown || padJump) && onGround) {
       this.player.setVelocityY(jumpSpeed);
     }
   }
