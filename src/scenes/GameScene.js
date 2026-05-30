@@ -59,7 +59,9 @@ export class GameScene extends Phaser.Scene {
     this.createGroundTexture('ground', 0x4CAF50, 800, 48);
     this.createGearTexture('gear', 0xFFD700, 20);
     this.createEnemyTexture('enemy', 24);
+    this.createFlyerTexture('flyer', 24);
     this.createLaserTexture('laser', 24, 6);
+    this.createHealthPickupTexture('health-pickup', 20);
 
     // Ground (permanent)
     this.ground = this.physics.add.staticGroup();
@@ -118,6 +120,22 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.gears, this.platforms);
     this.physics.add.overlap(this.player, this.gears, this.collectGear, null, this);
 
+    // Health pickups
+    this.healthPickups = this.physics.add.group();
+    this.physics.add.collider(this.healthPickups, this.ground);
+    this.physics.add.collider(this.healthPickups, this.platforms);
+    this.physics.add.overlap(this.player, this.healthPickups, this.collectHealth, null, this);
+
+    // Spawn a health pickup every 15 seconds
+    this.time.addEvent({
+      delay: 15000,
+      callback: this.spawnHealthPickup,
+      callbackScope: this,
+      loop: true
+    });
+    // Spawn one right away
+    this.spawnHealthPickup();
+
     // Enemies
     this.enemies = this.physics.add.group();
     this.spawnEnemies();
@@ -127,7 +145,7 @@ export class GameScene extends Phaser.Scene {
 
     // Lasers
     this.lasers = this.physics.add.group();
-    this.physics.add.overlap(this.lasers, this.enemies, this.freezeEnemy, null, this);
+    this.physics.add.overlap(this.lasers, this.enemies, this.destroyEnemy, null, this);
 
     // Controls
     this.cursors = this.input.keyboard.createCursorKeys();
@@ -248,23 +266,35 @@ export class GameScene extends Phaser.Scene {
     // Enemy patrol AI (skip frozen enemies)
     this.enemies.getChildren().forEach(enemy => {
       if (!enemy.active || enemy.getData('frozen')) return;
+      const spd = enemy.getData('speed');
+
+      // Horizontal patrol
       if (enemy.x <= enemy.getData('leftBound')) {
-        enemy.setVelocityX(enemy.getData('speed'));
+        enemy.setVelocityX(spd);
       } else if (enemy.x >= enemy.getData('rightBound')) {
-        enemy.setVelocityX(-enemy.getData('speed'));
+        enemy.setVelocityX(-spd);
+      }
+
+      // Vertical patrol for flyers
+      if (enemy.getData('flying')) {
+        if (enemy.y <= enemy.getData('topBound')) {
+          enemy.setVelocityY(spd * 0.6);
+        } else if (enemy.y >= enemy.getData('bottomBound')) {
+          enemy.setVelocityY(-spd * 0.6);
+        }
       }
     });
   }
 
   spawnEnemies() {
-    const enemyDefs = [
+    // Ground walkers
+    const walkerDefs = [
       { x: 400, y: 520, left: 300, right: 500, spd: 60 },
       { x: 600, y: 250, left: 540, right: 660, spd: 50 },
-      { x: 200, y: 190, left: 100, right: 280, spd: 45 },
       { x: 500, y: 350, left: 400, right: 520, spd: 55 },
     ];
 
-    enemyDefs.forEach(def => {
+    walkerDefs.forEach(def => {
       const enemy = this.enemies.create(def.x, def.y, 'enemy');
       enemy.setBounce(0);
       enemy.setCollideWorldBounds(true);
@@ -273,33 +303,64 @@ export class GameScene extends Phaser.Scene {
       enemy.setData('rightBound', def.right);
       enemy.setData('speed', def.spd);
       enemy.setData('frozen', false);
+      enemy.setData('flying', false);
       enemy.setVelocityX(def.spd);
+    });
+
+    // Flyers
+    const flyerDefs = [
+      { x: 200, y: 150, left: 100, right: 350, topBound: 80, bottomBound: 250, spd: 45 },
+      { x: 600, y: 120, left: 500, right: 750, topBound: 60, bottomBound: 200, spd: 55 },
+    ];
+
+    flyerDefs.forEach(def => {
+      const enemy = this.enemies.create(def.x, def.y, 'flyer');
+      enemy.setBounce(0);
+      enemy.setCollideWorldBounds(true);
+      enemy.body.setAllowGravity(false);
+      enemy.setData('leftBound', def.left);
+      enemy.setData('rightBound', def.right);
+      enemy.setData('topBound', def.topBound);
+      enemy.setData('bottomBound', def.bottomBound);
+      enemy.setData('speed', def.spd);
+      enemy.setData('frozen', false);
+      enemy.setData('flying', true);
+      enemy.setVelocityX(def.spd);
+      enemy.setVelocityY(def.spd * 0.6);
     });
   }
 
   spawnNewEnemy() {
     if (this.gameOver) return;
 
-    // Cap active enemies at 10 to keep it playable
     const activeCount = this.enemies.getChildren().filter(e => e.active).length;
     if (activeCount >= 10) return;
 
-    // Random spawn position along the top
     const x = Phaser.Math.Between(80, 720);
     const spd = Phaser.Math.Between(40, 80);
     const patrolRange = Phaser.Math.Between(60, 120);
+    const isFlyer = Math.random() < 0.35;
 
-    const enemy = this.enemies.create(x, -20, 'enemy');
+    const textureKey = isFlyer ? 'flyer' : 'enemy';
+    const spawnY = isFlyer ? Phaser.Math.Between(60, 200) : -20;
+
+    const enemy = this.enemies.create(x, spawnY, textureKey);
     enemy.setBounce(0);
     enemy.setCollideWorldBounds(true);
-    enemy.body.setAllowGravity(true);
+    enemy.body.setAllowGravity(!isFlyer);
     enemy.setData('leftBound', Math.max(20, x - patrolRange));
     enemy.setData('rightBound', Math.min(780, x + patrolRange));
     enemy.setData('speed', spd);
     enemy.setData('frozen', false);
+    enemy.setData('flying', isFlyer);
     enemy.setVelocityX(Phaser.Math.Between(0, 1) ? spd : -spd);
 
-    // Re-register colliders for new enemy
+    if (isFlyer) {
+      enemy.setData('topBound', Phaser.Math.Between(40, 120));
+      enemy.setData('bottomBound', Phaser.Math.Between(250, 400));
+      enemy.setVelocityY(spd * 0.6);
+    }
+
     this.physics.add.collider(enemy, this.ground);
     this.physics.add.collider(enemy, this.platforms);
   }
@@ -344,43 +405,38 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  freezeEnemy(laser, enemy) {
+  destroyEnemy(laser, enemy) {
+    const ex = enemy.x;
+    const ey = enemy.y;
+
     laser.destroy();
+    enemy.destroy();
 
-    if (enemy.getData('frozen')) return;
-
-    // Freeze the enemy
-    enemy.setData('frozen', true);
-    enemy.setVelocityX(0);
-    enemy.setVelocityY(0);
-    enemy.body.setAllowGravity(false);
-    enemy.setTint(0x4FC3F7);
-
-    // Freeze effect — red-to-ice particles
-    for (let i = 0; i < 8; i++) {
-      const particle = this.add.circle(
-        enemy.x + (Math.random() - 0.5) * 24,
-        enemy.y + (Math.random() - 0.5) * 24,
-        3, 0xFF1744
-      );
+    // Explosion particles
+    const colors = [0xFF1744, 0xFF6D00, 0xFFD600, 0x9C27B0];
+    for (let i = 0; i < 12; i++) {
+      const color = colors[Phaser.Math.Between(0, colors.length - 1)];
+      const particle = this.add.circle(ex, ey, Phaser.Math.Between(2, 5), color);
       this.tweens.add({
         targets: particle,
-        y: particle.y - 30,
+        x: ex + (Math.random() - 0.5) * 100,
+        y: ey + (Math.random() - 0.5) * 100,
         alpha: 0,
-        duration: 600,
+        scale: 0,
+        duration: 400 + Math.random() * 200,
         ease: 'Power2',
         onComplete: () => particle.destroy()
       });
     }
 
-    // Unfreeze after 8 seconds
-    this.time.delayedCall(8000, () => {
-      if (enemy.active) {
-        enemy.setData('frozen', false);
-        enemy.clearTint();
-        enemy.body.setAllowGravity(true);
-        enemy.setVelocityX(enemy.getData('speed'));
-      }
+    // Flash ring
+    const ring = this.add.circle(ex, ey, 5, 0xFFFFFF, 0.8);
+    this.tweens.add({
+      targets: ring,
+      scale: 4,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => ring.destroy()
     });
   }
 
@@ -458,8 +514,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   hitEnemy(player, enemy) {
-    // Frozen enemies don't hurt you
-    if (this.isInvincible || this.gameOver || enemy.getData('frozen')) return;
+    if (this.isInvincible || this.gameOver) return;
 
     this.health -= 1;
     this.updateHealthDisplay();
@@ -738,5 +793,97 @@ export class GameScene extends Phaser.Scene {
     g.fillRoundedRect(4, 2, w - 8, h - 4, 1);
     g.generateTexture(key, w, h);
     g.destroy();
+  }
+
+  createFlyerTexture(key, size) {
+    const g = this.add.graphics();
+    // Body — orange-red flying bug
+    g.fillStyle(0xFF6D00, 1);
+    g.fillCircle(size / 2, size / 2, size / 2 - 3);
+    // Wings
+    g.fillStyle(0xFFAB40, 0.7);
+    g.fillEllipse(size / 2 - 8, size / 2 - 6, 12, 6);
+    g.fillEllipse(size / 2 + 8, size / 2 - 6, 12, 6);
+    // Eyes
+    g.fillStyle(0xFFFFFF, 1);
+    g.fillCircle(size / 2 - 4, size / 2 - 2, 3);
+    g.fillCircle(size / 2 + 4, size / 2 - 2, 3);
+    g.fillStyle(0x000000, 1);
+    g.fillCircle(size / 2 - 3, size / 2 - 2, 1.5);
+    g.fillCircle(size / 2 + 5, size / 2 - 2, 1.5);
+    g.generateTexture(key, size, size);
+    g.destroy();
+  }
+
+  createHealthPickupTexture(key, size) {
+    const g = this.add.graphics();
+    // Green circle with white cross
+    g.fillStyle(0x4CAF50, 1);
+    g.fillCircle(size / 2, size / 2, size / 2 - 1);
+    // White cross
+    g.fillStyle(0xFFFFFF, 1);
+    g.fillRect(size / 2 - 2, size / 2 - 6, 4, 12);
+    g.fillRect(size / 2 - 6, size / 2 - 2, 12, 4);
+    g.generateTexture(key, size, size);
+    g.destroy();
+  }
+
+  spawnHealthPickup() {
+    if (this.gameOver) return;
+
+    // Max 2 health pickups on screen at a time
+    const activeCount = this.healthPickups.getChildren().filter(h => h.active).length;
+    if (activeCount >= 2) return;
+
+    const x = Phaser.Math.Between(100, 700);
+    const y = Phaser.Math.Between(150, 450);
+    const pickup = this.healthPickups.create(x, y, 'health-pickup');
+    pickup.body.setAllowGravity(false);
+    pickup.setCollideWorldBounds(true);
+
+    // Floating + glow animation
+    this.tweens.add({
+      targets: pickup,
+      y: y - 10,
+      duration: 1200,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    // Despawn after 20 seconds if not collected
+    this.time.delayedCall(20000, () => {
+      if (pickup.active) {
+        this.tweens.add({
+          targets: pickup,
+          alpha: 0,
+          duration: 500,
+          onComplete: () => pickup.destroy()
+        });
+      }
+    });
+  }
+
+  collectHealth(player, pickup) {
+    pickup.destroy();
+
+    if (this.health >= 3) return; // Already full
+
+    this.health = Math.min(this.health + 1, 3);
+    this.updateHealthDisplay();
+
+    // Green heal effect
+    for (let i = 0; i < 6; i++) {
+      const particle = this.add.circle(player.x, player.y, 4, 0x4CAF50);
+      this.tweens.add({
+        targets: particle,
+        y: player.y - 40 - Math.random() * 30,
+        x: player.x + (Math.random() - 0.5) * 40,
+        alpha: 0,
+        duration: 600,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
   }
 }
