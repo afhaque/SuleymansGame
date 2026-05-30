@@ -81,6 +81,14 @@ export class GameScene extends Phaser.Scene {
       loop: true
     });
 
+    // Enemy spawn timer — new enemy every 6 seconds
+    this.time.addEvent({
+      delay: 6000,
+      callback: this.spawnNewEnemy,
+      callbackScope: this,
+      loop: true
+    });
+
     // Player
     this.player = this.physics.add.sprite(100, height - 100, 'player');
     this.player.setCollideWorldBounds(true);
@@ -267,6 +275,33 @@ export class GameScene extends Phaser.Scene {
       enemy.setData('frozen', false);
       enemy.setVelocityX(def.spd);
     });
+  }
+
+  spawnNewEnemy() {
+    if (this.gameOver) return;
+
+    // Cap active enemies at 10 to keep it playable
+    const activeCount = this.enemies.getChildren().filter(e => e.active).length;
+    if (activeCount >= 10) return;
+
+    // Random spawn position along the top
+    const x = Phaser.Math.Between(80, 720);
+    const spd = Phaser.Math.Between(40, 80);
+    const patrolRange = Phaser.Math.Between(60, 120);
+
+    const enemy = this.enemies.create(x, -20, 'enemy');
+    enemy.setBounce(0);
+    enemy.setCollideWorldBounds(true);
+    enemy.body.setAllowGravity(true);
+    enemy.setData('leftBound', Math.max(20, x - patrolRange));
+    enemy.setData('rightBound', Math.min(780, x + patrolRange));
+    enemy.setData('speed', spd);
+    enemy.setData('frozen', false);
+    enemy.setVelocityX(Phaser.Math.Between(0, 1) ? spd : -spd);
+
+    // Re-register colliders for new enemy
+    this.physics.add.collider(enemy, this.ground);
+    this.physics.add.collider(enemy, this.platforms);
   }
 
   shootLaser() {
