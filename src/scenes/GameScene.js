@@ -22,6 +22,10 @@ export class GameScene extends Phaser.Scene {
     this.health = 3;
     this.isInvincible = false;
     this.gameOver = false;
+    this.laserCharges = 2;
+    this.maxLaserCharges = 2;
+    this.laserRecharging = false;
+    this.facingRight = true;
   }
 
   create() {
@@ -53,6 +57,7 @@ export class GameScene extends Phaser.Scene {
     this.createGroundTexture('ground', 0x4CAF50, 800, 48);
     this.createGearTexture('gear', 0xFFD700, 20);
     this.createEnemyTexture('enemy', 24);
+    this.createLaserTexture('laser', 24, 6);
 
     // Ground (permanent)
     this.ground = this.physics.add.staticGroup();
@@ -110,9 +115,24 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.enemies, this.platforms);
     this.physics.add.overlap(this.player, this.enemies, this.hitEnemy, null, this);
 
+    // Lasers
+    this.lasers = this.physics.add.group();
+    this.physics.add.overlap(this.lasers, this.enemies, this.freezeEnemy, null, this);
+
     // Controls
     this.cursors = this.input.keyboard.createCursorKeys();
     this.spaceBar = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.xKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
+
+    // Keyboard X to shoot
+    this.xKey.on('down', () => { if (!this.gameOver) this.shootLaser(); });
+
+    // Gamepad X button to shoot
+    this.input.gamepad.on('down', (pad, button) => {
+      if (this.gameOver) return;
+      // X button is index 2 on standard gamepad mapping
+      if (button.index === 2) this.shootLaser();
+    });
 
     // HUD
     this.scoreText = this.add.text(16, 16, 'Gears: 0', {
@@ -139,6 +159,36 @@ export class GameScene extends Phaser.Scene {
       stroke: '#333333',
       strokeThickness: 3
     }).setOrigin(1, 0).setScrollFactor(0);
+
+    // Laser HUD
+    this.laserLabel = this.add.text(16, 48, 'LASER', {
+      fontSize: '12px',
+      fontFamily: 'Arial, sans-serif',
+      fontStyle: 'bold',
+      color: '#00E5FF',
+      stroke: '#333333',
+      strokeThickness: 2
+    }).setScrollFactor(0);
+
+    this.laserIcons = [];
+    for (let i = 0; i < this.maxLaserCharges; i++) {
+      const icon = this.add.rectangle(70 + i * 22, 55, 16, 8, 0x00E5FF);
+      icon.setScrollFactor(0);
+      this.laserIcons.push(icon);
+    }
+
+    // Recharge bar (hidden until recharging)
+    this.rechargeBarBg = this.add.rectangle(16 + 50, 72, 100, 6, 0x333333).setOrigin(0, 0.5).setScrollFactor(0);
+    this.rechargeBarFill = this.add.rectangle(16 + 50, 72, 0, 6, 0x00E5FF).setOrigin(0, 0.5).setScrollFactor(0);
+    this.rechargeText = this.add.text(16, 66, 'RECHARGING', {
+      fontSize: '10px',
+      fontFamily: 'Arial, sans-serif',
+      color: '#00E5FF',
+      stroke: '#333333',
+      strokeThickness: 2
+    }).setScrollFactor(0).setAlpha(0);
+    this.rechargeBarBg.setAlpha(0);
+    this.rechargeBarFill.setAlpha(0);
 
     // Floating animation for gears
     this.gears.getChildren().forEach((gear) => {
@@ -167,9 +217,11 @@ export class GameScene extends Phaser.Scene {
     if (goLeft) {
       this.player.setVelocityX(-speed);
       this.player.setFlipX(true);
+      this.facingRight = false;
     } else if (goRight) {
       this.player.setVelocityX(speed);
       this.player.setFlipX(false);
+      this.facingRight = true;
     } else {
       this.player.setVelocityX(0);
     }
@@ -181,10 +233,9 @@ export class GameScene extends Phaser.Scene {
       this.player.setVelocityY(jumpSpeed);
     }
 
-    // Enemy patrol AI
+    // Enemy patrol AI (skip frozen enemies)
     this.enemies.getChildren().forEach(enemy => {
-      if (!enemy.active) return;
-      // Reverse direction at patrol bounds
+      if (!enemy.active || enemy.getData('frozen')) return;
       if (enemy.x <= enemy.getData('leftBound')) {
         enemy.setVelocityX(enemy.getData('speed'));
       } else if (enemy.x >= enemy.getData('rightBound')) {
@@ -209,7 +260,109 @@ export class GameScene extends Phaser.Scene {
       enemy.setData('leftBound', def.left);
       enemy.setData('rightBound', def.right);
       enemy.setData('speed', def.spd);
+      enemy.setData('frozen', false);
       enemy.setVelocityX(def.spd);
+    });
+  }
+
+  shootLaser() {
+    if (this.laserCharges <= 0 || this.laserRecharging) return;
+
+    this.laserCharges -= 1;
+    this.updateLaserHUD();
+
+    // Create laser projectile
+    const dir = this.facingRight ? 1 : -1;
+    const offsetX = dir * 20;
+    const laser = this.lasers.create(this.player.x + offsetX, this.player.y, 'laser');
+    laser.body.setAllowGravity(false);
+    laser.setVelocityX(dir * 500);
+    if (dir < 0) laser.setFlipX(true);
+
+    // Destroy laser after 1 second if it doesn't hit anything
+    this.time.delayedCall(1000, () => {
+      if (laser.active) laser.destroy();
+    });
+
+    // Start recharge if out of charges
+    if (this.laserCharges === 0) {
+      this.startRecharge();
+    }
+  }
+
+  freezeEnemy(laser, enemy) {
+    laser.destroy();
+
+    if (enemy.getData('frozen')) return;
+
+    // Freeze the enemy
+    enemy.setData('frozen', true);
+    enemy.setVelocityX(0);
+    enemy.setTint(0x00E5FF);
+
+    // Freeze effect — ice particles
+    for (let i = 0; i < 6; i++) {
+      const particle = this.add.circle(
+        enemy.x + (Math.random() - 0.5) * 20,
+        enemy.y + (Math.random() - 0.5) * 20,
+        3, 0x00E5FF
+      );
+      this.tweens.add({
+        targets: particle,
+        y: particle.y - 30,
+        alpha: 0,
+        duration: 600,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // Unfreeze after 8 seconds
+    this.time.delayedCall(8000, () => {
+      if (enemy.active) {
+        enemy.setData('frozen', false);
+        enemy.clearTint();
+        enemy.setVelocityX(enemy.getData('speed'));
+      }
+    });
+  }
+
+  startRecharge() {
+    this.laserRecharging = true;
+    this.rechargeText.setAlpha(1);
+    this.rechargeBarBg.setAlpha(1);
+    this.rechargeBarFill.setAlpha(1);
+    this.rechargeBarFill.width = 0;
+
+    // Animate the recharge bar over 5 seconds
+    this.tweens.add({
+      targets: this.rechargeBarFill,
+      width: 100,
+      duration: 5000,
+      ease: 'Linear',
+      onComplete: () => {
+        this.laserCharges = this.maxLaserCharges;
+        this.laserRecharging = false;
+        this.rechargeText.setAlpha(0);
+        this.rechargeBarBg.setAlpha(0);
+        this.rechargeBarFill.setAlpha(0);
+        this.updateLaserHUD();
+      }
+    });
+
+    // Flash the recharge text
+    this.tweens.add({
+      targets: this.rechargeText,
+      alpha: 0.3,
+      duration: 500,
+      yoyo: true,
+      repeat: 9
+    });
+  }
+
+  updateLaserHUD() {
+    this.laserIcons.forEach((icon, i) => {
+      icon.setFillStyle(i < this.laserCharges ? 0x00E5FF : 0x333333);
     });
   }
 
@@ -526,6 +679,21 @@ export class GameScene extends Phaser.Scene {
     g.fillTriangle(0, size / 2, 6, size / 2 - 4, 6, size / 2 + 4);
     g.fillTriangle(size, size / 2, size - 6, size / 2 - 4, size - 6, size / 2 + 4);
     g.generateTexture(key, size, size);
+    g.destroy();
+  }
+
+  createLaserTexture(key, w, h) {
+    const g = this.add.graphics();
+    // Glow
+    g.fillStyle(0x00E5FF, 0.3);
+    g.fillRoundedRect(0, 0, w, h, 3);
+    // Core beam
+    g.fillStyle(0x00E5FF, 1);
+    g.fillRoundedRect(2, 1, w - 4, h - 2, 2);
+    // Bright center
+    g.fillStyle(0xFFFFFF, 0.8);
+    g.fillRoundedRect(4, 2, w - 8, h - 4, 1);
+    g.generateTexture(key, w, h);
     g.destroy();
   }
 }
