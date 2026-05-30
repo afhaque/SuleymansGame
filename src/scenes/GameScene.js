@@ -111,17 +111,15 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // Floating animation for gears
-    this.gears.children.iterate((gear) => {
-      if (gear) {
-        this.tweens.add({
-          targets: gear,
-          y: gear.y - 8,
-          duration: 1000 + Math.random() * 500,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut'
-        });
-      }
+    this.gears.getChildren().forEach((gear) => {
+      this.tweens.add({
+        targets: gear,
+        y: gear.y - 8,
+        duration: 1000 + Math.random() * 500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
     });
 
     // Win message container (hidden initially)
