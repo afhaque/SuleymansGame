@@ -26,6 +26,8 @@ export class GameScene extends Phaser.Scene {
     this.maxLaserCharges = 2;
     this.laserRecharging = false;
     this.facingRight = true;
+    this.lastShotTime = 0;
+    this.padShootWasDown = false;
   }
 
   create() {
@@ -63,7 +65,7 @@ export class GameScene extends Phaser.Scene {
     this.ground = this.physics.add.staticGroup();
     this.ground.create(400, height - 24, 'ground');
 
-    // Floating platforms (these will disappear/reappear)
+    // Floating platforms
     this.platforms = this.physics.add.staticGroup();
     this.floatingPlatforms = [];
     PLATFORM_SLOTS.forEach(slot => {
@@ -127,13 +129,6 @@ export class GameScene extends Phaser.Scene {
     // Keyboard X to shoot
     this.xKey.on('down', () => { if (!this.gameOver) this.shootLaser(); });
 
-    // Gamepad X button to shoot
-    this.input.gamepad.on('down', (pad, button) => {
-      if (this.gameOver) return;
-      // X button is index 2 on standard gamepad mapping
-      if (button.index === 2) this.shootLaser();
-    });
-
     // HUD
     this.scoreText = this.add.text(16, 16, 'Gears: 0', {
       fontSize: '24px',
@@ -165,25 +160,25 @@ export class GameScene extends Phaser.Scene {
       fontSize: '12px',
       fontFamily: 'Arial, sans-serif',
       fontStyle: 'bold',
-      color: '#00E5FF',
+      color: '#FF1744',
       stroke: '#333333',
       strokeThickness: 2
     }).setScrollFactor(0);
 
     this.laserIcons = [];
     for (let i = 0; i < this.maxLaserCharges; i++) {
-      const icon = this.add.rectangle(70 + i * 22, 55, 16, 8, 0x00E5FF);
+      const icon = this.add.rectangle(70 + i * 22, 55, 16, 8, 0xFF1744);
       icon.setScrollFactor(0);
       this.laserIcons.push(icon);
     }
 
-    // Recharge bar (hidden until recharging)
+    // Recharge bar
     this.rechargeBarBg = this.add.rectangle(16 + 50, 72, 100, 6, 0x333333).setOrigin(0, 0.5).setScrollFactor(0);
-    this.rechargeBarFill = this.add.rectangle(16 + 50, 72, 0, 6, 0x00E5FF).setOrigin(0, 0.5).setScrollFactor(0);
+    this.rechargeBarFill = this.add.rectangle(16 + 50, 72, 0, 6, 0xFF1744).setOrigin(0, 0.5).setScrollFactor(0);
     this.rechargeText = this.add.text(16, 66, 'RECHARGING', {
       fontSize: '10px',
       fontFamily: 'Arial, sans-serif',
-      color: '#00E5FF',
+      color: '#FF1744',
       stroke: '#333333',
       strokeThickness: 2
     }).setScrollFactor(0).setAlpha(0);
@@ -233,6 +228,15 @@ export class GameScene extends Phaser.Scene {
       this.player.setVelocityY(jumpSpeed);
     }
 
+    // Gamepad shoot — poll X button (index 2) and Y button (index 3) to cover 8BitDo mapping variants
+    if (pad) {
+      const shootDown = pad.isButtonDown(2) || pad.isButtonDown(3);
+      if (shootDown && !this.padShootWasDown) {
+        this.shootLaser();
+      }
+      this.padShootWasDown = shootDown;
+    }
+
     // Enemy patrol AI (skip frozen enemies)
     this.enemies.getChildren().forEach(enemy => {
       if (!enemy.active || enemy.getData('frozen')) return;
@@ -268,6 +272,11 @@ export class GameScene extends Phaser.Scene {
   shootLaser() {
     if (this.laserCharges <= 0 || this.laserRecharging) return;
 
+    // Debounce — min 200ms between shots
+    const now = this.time.now;
+    if (now - this.lastShotTime < 200) return;
+    this.lastShotTime = now;
+
     this.laserCharges -= 1;
     this.updateLaserHUD();
 
@@ -278,6 +287,16 @@ export class GameScene extends Phaser.Scene {
     laser.body.setAllowGravity(false);
     laser.setVelocityX(dir * 500);
     if (dir < 0) laser.setFlipX(true);
+
+    // Muzzle flash effect
+    const flash = this.add.circle(this.player.x + offsetX, this.player.y, 8, 0xFF1744, 0.8);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scale: 2,
+      duration: 150,
+      onComplete: () => flash.destroy()
+    });
 
     // Destroy laser after 1 second if it doesn't hit anything
     this.time.delayedCall(1000, () => {
@@ -298,14 +317,16 @@ export class GameScene extends Phaser.Scene {
     // Freeze the enemy
     enemy.setData('frozen', true);
     enemy.setVelocityX(0);
-    enemy.setTint(0x00E5FF);
+    enemy.setVelocityY(0);
+    enemy.body.setAllowGravity(false);
+    enemy.setTint(0x4FC3F7);
 
-    // Freeze effect — ice particles
-    for (let i = 0; i < 6; i++) {
+    // Freeze effect — red-to-ice particles
+    for (let i = 0; i < 8; i++) {
       const particle = this.add.circle(
-        enemy.x + (Math.random() - 0.5) * 20,
-        enemy.y + (Math.random() - 0.5) * 20,
-        3, 0x00E5FF
+        enemy.x + (Math.random() - 0.5) * 24,
+        enemy.y + (Math.random() - 0.5) * 24,
+        3, 0xFF1744
       );
       this.tweens.add({
         targets: particle,
@@ -322,6 +343,7 @@ export class GameScene extends Phaser.Scene {
       if (enemy.active) {
         enemy.setData('frozen', false);
         enemy.clearTint();
+        enemy.body.setAllowGravity(true);
         enemy.setVelocityX(enemy.getData('speed'));
       }
     });
@@ -334,7 +356,6 @@ export class GameScene extends Phaser.Scene {
     this.rechargeBarFill.setAlpha(1);
     this.rechargeBarFill.width = 0;
 
-    // Animate the recharge bar over 5 seconds
     this.tweens.add({
       targets: this.rechargeBarFill,
       width: 100,
@@ -350,7 +371,6 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // Flash the recharge text
     this.tweens.add({
       targets: this.rechargeText,
       alpha: 0.3,
@@ -362,14 +382,13 @@ export class GameScene extends Phaser.Scene {
 
   updateLaserHUD() {
     this.laserIcons.forEach((icon, i) => {
-      icon.setFillStyle(i < this.laserCharges ? 0x00E5FF : 0x333333);
+      icon.setFillStyle(i < this.laserCharges ? 0xFF1744 : 0x333333);
     });
   }
 
   cyclePlatforms() {
     if (this.gameOver) return;
 
-    // Pick 2-3 random platforms to toggle
     const count = Phaser.Math.Between(2, 3);
     const indices = Phaser.Utils.Array.Shuffle(
       Array.from({ length: this.floatingPlatforms.length }, (_, i) => i)
@@ -378,7 +397,6 @@ export class GameScene extends Phaser.Scene {
     indices.forEach(i => {
       const p = this.floatingPlatforms[i];
       if (p.visible) {
-        // Fade out and disable
         this.tweens.add({
           targets: p.sprite,
           alpha: 0,
@@ -389,7 +407,6 @@ export class GameScene extends Phaser.Scene {
           }
         });
       } else {
-        // Re-enable at a new random Y within a range, or same spot
         const newY = p.slot.y + Phaser.Math.Between(-40, 40);
         const clampedY = Phaser.Math.Clamp(newY, 140, 460);
         p.sprite.enableBody(true, p.slot.x, clampedY, true, true);
@@ -406,17 +423,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   hitEnemy(player, enemy) {
-    if (this.isInvincible || this.gameOver) return;
+    // Frozen enemies don't hurt you
+    if (this.isInvincible || this.gameOver || enemy.getData('frozen')) return;
 
     this.health -= 1;
     this.updateHealthDisplay();
 
-    // Knockback
     const knockDir = player.x < enemy.x ? -1 : 1;
     player.setVelocityX(knockDir * 250);
     player.setVelocityY(-200);
 
-    // Invincibility frames
     this.isInvincible = true;
     this.tweens.add({
       targets: player,
@@ -430,7 +446,6 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // Screen shake
     this.cameras.main.shake(200, 0.01);
 
     if (this.health <= 0) {
@@ -550,17 +565,14 @@ export class GameScene extends Phaser.Scene {
       repeat: -1
     });
 
-    // Keyboard restart
     this.input.keyboard.once('keydown', () => {
       this.scene.restart();
     });
 
-    // Click/touch restart
     this.input.once('pointerdown', () => {
       this.scene.restart();
     });
 
-    // Gamepad restart — any button
     this.input.gamepad.once('down', () => {
       this.scene.restart();
     });
@@ -662,18 +674,14 @@ export class GameScene extends Phaser.Scene {
 
   createEnemyTexture(key, size) {
     const g = this.add.graphics();
-    // Spiky bug body
     g.fillStyle(0x9C27B0, 1);
     g.fillCircle(size / 2, size / 2, size / 2 - 2);
-    // Angry eyes
     g.fillStyle(0xFF1744, 1);
     g.fillCircle(size / 2 - 4, size / 2 - 3, 3);
     g.fillCircle(size / 2 + 4, size / 2 - 3, 3);
-    // Pupils
     g.fillStyle(0x000000, 1);
     g.fillCircle(size / 2 - 3, size / 2 - 3, 1.5);
     g.fillCircle(size / 2 + 5, size / 2 - 3, 1.5);
-    // Spikes
     g.fillStyle(0x7B1FA2, 1);
     g.fillTriangle(size / 2, 0, size / 2 - 4, 6, size / 2 + 4, 6);
     g.fillTriangle(0, size / 2, 6, size / 2 - 4, 6, size / 2 + 4);
@@ -685,13 +693,13 @@ export class GameScene extends Phaser.Scene {
   createLaserTexture(key, w, h) {
     const g = this.add.graphics();
     // Glow
-    g.fillStyle(0x00E5FF, 0.3);
+    g.fillStyle(0xFF1744, 0.3);
     g.fillRoundedRect(0, 0, w, h, 3);
     // Core beam
-    g.fillStyle(0x00E5FF, 1);
+    g.fillStyle(0xFF1744, 1);
     g.fillRoundedRect(2, 1, w - 4, h - 2, 2);
     // Bright center
-    g.fillStyle(0xFFFFFF, 0.8);
+    g.fillStyle(0xFFCDD2, 0.9);
     g.fillRoundedRect(4, 2, w - 8, h - 4, 1);
     g.generateTexture(key, w, h);
     g.destroy();
